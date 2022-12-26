@@ -24,5 +24,6 @@ This repository converts Tensorflow code of the book __Deep Reinforcement Learni
 - Twin-Delayed DDPG (TD3)
 
 ### Chapter 13
+_in progress_
 - Trust Region Policy Optimization (TRPO)
 - Proximal Policy Optimization Algorithm (PPO)
