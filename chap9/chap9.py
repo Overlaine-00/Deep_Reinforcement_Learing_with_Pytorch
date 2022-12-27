@@ -37,7 +37,7 @@ total_training_num, errored_training_num, done_training_num = 0,0,0
 ### Deep Q-Learning (DQN)
 
 ## DQN class
-class DQN:    # see : https://tutorials.pytorch.kr/intermediate/reinforcement_q_learning.html
+class DQN:
     def __init__(self, state_size, action_size : int):
         self.state_size = state_size
         self.action_size = action_size
@@ -48,7 +48,6 @@ class DQN:    # see : https://tutorials.pytorch.kr/intermediate/reinforcement_q_
         self.update_rate = 1000
         
         
-        # set weights. see : https://d2l.ai/chapter_builders-guide/init-param.html
         self.main_network = self.build_network()
         self.main_loss = nn.MSELoss()
         self.main_optimizer = optim.Adam(self.main_network.parameters(), lr=1e-07)
@@ -91,7 +90,6 @@ class DQN:    # see : https://tutorials.pytorch.kr/intermediate/reinforcement_q_
         return np.argmax(Q_values[0]).item()
     
     
-    # pytorch fit consists of train and test. see : https://acdongpgm.tistory.com/231
     def train(self, pred_Q : Tensor, target_Q : Tensor, model : Sequential, loss_fn, optimizer):
         # compute loss
         loss : Tensor = loss_fn(pred_Q, target_Q)

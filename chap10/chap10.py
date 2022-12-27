@@ -46,8 +46,6 @@ def discount_and_normalize_rewards(episode_rewards : list[float]) -> Tensor:
 
 
 ### model structuring
-# see : https://everyday-image-processing.tistory.com/98,
-#       https://goodboychan.github.io/python/reinforcement_learning/pytorch/udacity/2021/05/12/REINFORCE-CartPole.html
         
 class PG:
     def __init__(self, state_shape : int = state_shape, num_actions : int = num_actions):

@@ -28,7 +28,7 @@ batch_size = 64
 
 
 
-### DDPG class. see : https://github.com/ghliu/pytorch-ddpg
+### DDPG class
 class Actor_pytorch(nn.Module):
     def __init__(self, state_shape=state_shape, action_shape=action_shape, upper_bound = action_bound[1], device=device):
         super().__init__()

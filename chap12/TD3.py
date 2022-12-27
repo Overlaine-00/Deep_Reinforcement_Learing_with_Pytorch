@@ -30,7 +30,7 @@ action_update_delay = 5
 
 
 
-### TD3 modules    not trained -> see https://github.com/sfujim/TD3/blob/master/TD3.py
+### TD3 modules
 
 ## networks
 # Actor

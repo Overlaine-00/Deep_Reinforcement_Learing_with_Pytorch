@@ -45,8 +45,7 @@ log_dir = 'D:\\logs'
 
 
 
-### actor-critic model A3C. see : https://github.com/keep9oing/PG-Family/blob/main/A3C.py
-#                                 https://github.com/MorvanZhou/pytorch-A3C/blob/master/continuous_A3C.py
+### actor-critic model A3C
 
 class Actor_pytorch(nn.Module):
     def __init__(self, state_shape=state_shape, action_shape=action_shape, device=device):
