@@ -17,7 +17,11 @@ action_bound = [env.action_space.low, env.action_space.high]
 
 
 # variables
-delta = 0.01
+gamma = 0.9    # decay
+tau = 0.01    # lr
+delta = 0.01    # conjuagate gradient threshold
+buffer_size = int(10e4)
+batch_size = 100
 
 
 
@@ -51,10 +55,20 @@ class TRPO:
         return torch.sum( old_sigma/new_sigma ) + \
                torch.sum( ((new_mean-old_mean)**2)/new_sigma ) + \
                torch.log(torch.prod(new_sigma)/torch.prod(old_sigma))
+    
+
+    def log_prob(self, action, mean, log_std):
+        # constant term is omitted
+        return -log_std - (action-mean)**2 / (2*torch.exp(log_std)**2)
 
 
-    def get_g(self, L):
-        return autograd.grad(L, list(self.policy.parameters()), retain_graph=True)
+    def grad_log_prob(self, action, mean, log_std):
+        log_prob = self.log_prob(action, mean, log_std)
+        return autograd.grad(log_prob, list(self.policy.parameters()))
+    
+
+    ## g will be obtained from grad_log_prob + advantages at outside of the class
+
 
     def get_H(self, kl_div):
         '''
@@ -62,11 +76,22 @@ class TRPO:
         '''
         d_kl = autograd.grad(kl_div, list(self.policy.parameters()), create_graph=True)
         return autograd.grad(d_kl, list(self.policy.parameters()))
-    
-    def log_prob(self, action, mean, log_std):
-        # constant term is omitted
-        return -log_std - (action-mean)**2 / (2*torch.exp(log_std)**2)
+
+
+    def conjugate_gradient(self, H : Tensor, g : Tensor) -> Tensor:    # https://en.wikipedia.org/wiki/Conjugate_gradient_method
+        basis = [g]    # orthogonal basis w.r.t inner product H
+        s = (g@g)/(g@H@g) * g
+        remainder = g - H@s    # error : g-Hs
+
+        while (torch.norm(remainder) > delta):
+            base = remainder - torch.sum(torch.Tensor([(p@H@remainder)/(p@H@p)*p for p in basis]))
+            basis.append(base)
+            s += (base@remainder)/(base@H@base) * base
+            remainder = g - H@s
+
+        return s
         
+
     def forward(self, state : Tensor) -> Tensor:
         value = self.value(state)
         policy = self.policy(state)
