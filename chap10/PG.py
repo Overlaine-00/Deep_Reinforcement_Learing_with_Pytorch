@@ -16,9 +16,6 @@ import plotly.io as pio
 cpu = "cpu"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# import tensorflow.compat.v1 as tf
-# tf.disable_v2_behavior()
-
 
 
 

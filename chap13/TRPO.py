@@ -22,9 +22,11 @@ action_bound = [env.action_space.low, env.action_space.high]
 # variables
 gamma = 0.9    # decay
 tau = 0.01    # lr
-delta = 0.01    # conjuagate gradient threshold
-buffer_size = int(10e4)
-batch_size = 100
+delta = 0.01    # restrict condition of TRPO
+epsilon = 0.01    # conjuagate gradient threshold
+
+alpha = 1    # backtracking coefficient (update rate of policy network, 0~1. Theoretically alpha=1)
+lr = 0.001    # learning rate of value network
 
 
 
@@ -53,23 +55,13 @@ class TRPO(nn.Module):
                                     nn.ReLU(),
                                     nn.Linear(200, 2*action_shape, dtype=torch.float))
     
-    def KL_div(self, old_mean, old_log_sigma, new_mean, new_log_sigma):
-        '''
-        old_theta, new_theta : output of self.policy
-        '''
-        old_sigma, new_sigma = torch.exp(old_log_sigma), torch.exp(new_log_sigma)
 
-        return torch.sum( old_sigma/new_sigma ) + \
-               torch.sum( ((new_mean-old_mean)**2)/new_sigma ) + \
-               torch.log(torch.prod(new_sigma)/torch.prod(old_sigma))
-    
-
-    def log_prob(self, action, mean, log_std):
+    def log_prob(self, action : Tensor, mean : Tensor, log_std : Tensor) -> Tensor:
         # constant term is omitted
         return -log_std - (action-mean)**2 / (2*torch.exp(log_std)**2)
 
 
-    def grad_log_prob(self, action, mean, log_std):
+    def grad_log_prob(self, action : Tensor, mean : Tensor, log_std : Tensor) -> Tensor:
         log_prob = self.log_prob(action, mean, log_std)
         return autograd.grad(log_prob, list(self.policy.parameters()))
     
@@ -77,12 +69,28 @@ class TRPO(nn.Module):
     ## g will be obtained from grad_log_prob + advantages at outside of the class
 
 
-    def get_H(self, kl_div):
+    def get_H(self, mean : Tensor, log_std : Tensor) -> Tensor:
         '''
-        kl_div : output of self.KL_div()
+        mean, log_std comes from self.forward()
+
+        Expression : 
+        Let \mu = mean, \sigma = variance. Subscript _0 means input(fixed) values.
+        We use numpy symbol : *, / = Hadamard(elementwise) or broadcasting operation,
+                              @ = matrix multiplication.
+        \nabla D_KL = \sigma^{-1} * (\mu-\mu_0) @ \frac{d\mu}{d\phi} + (\sigma^{-2}*\sigma_0 + \sigma^{-1})@\frac{d\mu}{d\phi}
+        \nabla^2 D_KL = ( \sigma_0^{-1}*(\frac{d\mu}{d\phi})^\top ) @ \frac{d\mu}{d\phi}
+                        - 3( \sigma_0^{-1}*(\frac{d\mu}{d\phi})^\top) ) @ \frac{d\mu}{d\phi}
+                        + 2\sigma_0^{-1} @ \frac{d\mu^2}{d^2\phi}
+        Here, the term \sigma^{-2}(\mu - \mu_0)**2 \frac{d\mu^2}{d^2\phi} in \nabla D_KL vanishes because
+        after substituting \mu=\mu_0, its second derivative becomes zero
         '''
-        d_kl = autograd.grad(kl_div, list(self.policy.parameters()), create_graph=True)
-        return autograd.grad(d_kl, list(self.policy.parameters()))
+        variance = torch.exp(2*log_std)
+
+        d_mean = autograd.grad(mean, list(self.policy.parameters()))
+        d_variance = autograd.grad(variance, list(self.policy.parameters()), create_graph=True)
+        d2_variance = autograd.grad(d_variance, list(self.policy.parameters()))
+
+        return (d_mean/variance).T @ d_mean - 3*(d_variance/variance).T @ d_variance + 2*(1/variance) @ d2_variance
 
 
     def conjugate_gradient(self, H : Tensor, g : Tensor) -> Tensor:    # https://en.wikipedia.org/wiki/Conjugate_gradient_method
@@ -90,7 +98,7 @@ class TRPO(nn.Module):
         s = (g@g)/(g@H@g) * g
         remainder = g - H@s    # error : g-Hs
 
-        while (torch.norm(remainder) > delta):
+        while (torch.norm(remainder) > epsilon):
             base = remainder - torch.sum(torch.Tensor([(p@H@remainder)/(p@H@p)*p for p in basis]))
             basis.append(base)
             s += (base@remainder)/(base@H@base) * base
@@ -110,45 +118,15 @@ class TRPO(nn.Module):
 
 
 
-### Replay Buffer
-
-state_index = [_ for _ in range(state_shape)]
-action_index = [_ + state_shape for _ in range(action_shape)]
-reward_index = [state_shape + action_shape]
-next_state_index = [_ + state_shape + action_shape + 1 for _ in range(state_shape)]
-class Replay_Buffer:
-    def __init__(self, capacity : int = buffer_size, state_shape : int = state_shape, action_shape : int = action_shape):
-        '''
-        basic replay buffer.
-        store : state, action, reward, next_state
-        '''
-        self.capacity = capacity
-        self.pointer = 0
-        
-        self.buffer = np.zeros([capacity, 2*state_shape + action_shape + 1], dtype=np.float32)
-    
-    def append(self, state : np.ndarray, action : np.float32, reward : np.float32, next_state : np.ndarray):
-        index = self.pointer%self.capacity
-        self.buffer[index] = np.concatenate([state, np.array([action, reward]), next_state])
-        
-        self.pointer += 1
-        if self.pointer >= 2*self.capacity: self.pointer -= self.capacity
-        
-        del index
-    
-    def batch_sample(self, batch_size : int) -> np.ndarray:
-        # choose sample by bootstapping
-        index = np.random.randint(0, min(self.pointer, self.capacity), (batch_size,))
-        
-        return self.buffer[index]
-
-
-
-### used variables
+### used variables and functions
 trpo = TRPO().to(device=device)
-buffer = Replay_Buffer()
+optimizer = optim.Adam(trpo.value.parameters(), lr=0.001)
 
-optimizer = optim.Adam(trpo.parameters(), lr=0.001)
+
+def policy_update(update_amount : Tensor, network = trpo):
+    for param, added in zip(network.parameters(), update_amount):
+        param.data += added
+
 
 
 
@@ -159,30 +137,35 @@ num_timesteps = 500
 
 print("Chapter 13.    TRPO")
 
-for i in range(num_episodes):
+for i in range(1, num_episodes+1):
     state = env.reset()
     ep_reward = []
     ep_grad_log_prob = []
     ep_value = []
+
+    H = 0
 
     for t in range(num_timesteps):
         value, mean, log_std = trpo(Tensor(state).to(device=device))
         action = torch.normal(mean, torch.exp(log_std)).item()
         next_state, reward, done, info = env.step(action)
 
-        value = value.to(device=cpu).item()
-        mean = mean.to(device=cpu).item()
-        log_std = log_std.to(device=cpu).item()
+        grad_log_prob = trpo.grad_log_prob(action, mean, log_std).to(device=cpu).numpy()
+        value = value.to(device=cpu).numpy()
 
-        ep_reward.append(reward)
-        ep_grad_log_prob.append(trpo.grad_log_prob(action, mean, log_std))
+        ep_reward.append(reward*(gamma**t))    # discounted reward
+        ep_grad_log_prob.append(grad_log_prob)
         ep_value.append(value)
+        H += trpo.get_H(mean, log_std).to(device=cpu).numpy()
 
         if done: break
     
-    ep_reward = np.array(ep_reward)
+    ep_reward = np.array([sum(ep_reward[k:])/(gamma**k) for k in range(ep_reward)])
     ep_grad_log_prob = np.array(ep_grad_log_prob)
     ep_value = np.array(ep_value)
 
-    g = np.sum(ep_grad_log_prob*(ep_reward))
+    g = np.sum(ep_grad_log_prob*(ep_reward-ep_value))
+    H /= t+1
+    s = trpo.conjugate_gradient(H,g)
 
+    policy_update(alpha*torch.sqrt())
