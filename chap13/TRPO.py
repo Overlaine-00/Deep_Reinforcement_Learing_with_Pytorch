@@ -6,6 +6,9 @@ from torch import tensor
 from torch import nn, optim, Tensor, autograd
 import torch.nn.functional as F
 
+cpu = "cpu"
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
 
 
 ### create environment
@@ -27,8 +30,12 @@ batch_size = 100
 
 
 
-class TRPO:
+### TRPO
+
+class TRPO(nn.Module):
     def __init__(self, state_shape = state_shape, action_shape = action_shape, action_bound = action_bound):
+        super().__init__()
+
         self.action_shape = action_shape
         self.low, self.high = action_bound
 
@@ -92,9 +99,90 @@ class TRPO:
         return s
         
 
-    def forward(self, state : Tensor) -> Tensor:
+    def forward(self, state : Tensor) -> tuple(Tensor):
         value = self.value(state)
         policy = self.policy(state)
         mean, log_std = policy[:action_shape], policy[action_shape:]
 
         return value, mean, log_std
+
+
+
+
+
+### Replay Buffer
+
+state_index = [_ for _ in range(state_shape)]
+action_index = [_ + state_shape for _ in range(action_shape)]
+reward_index = [state_shape + action_shape]
+next_state_index = [_ + state_shape + action_shape + 1 for _ in range(state_shape)]
+class Replay_Buffer:
+    def __init__(self, capacity : int = buffer_size, state_shape : int = state_shape, action_shape : int = action_shape):
+        '''
+        basic replay buffer.
+        store : state, action, reward, next_state
+        '''
+        self.capacity = capacity
+        self.pointer = 0
+        
+        self.buffer = np.zeros([capacity, 2*state_shape + action_shape + 1], dtype=np.float32)
+    
+    def append(self, state : np.ndarray, action : np.float32, reward : np.float32, next_state : np.ndarray):
+        index = self.pointer%self.capacity
+        self.buffer[index] = np.concatenate([state, np.array([action, reward]), next_state])
+        
+        self.pointer += 1
+        if self.pointer >= 2*self.capacity: self.pointer -= self.capacity
+        
+        del index
+    
+    def batch_sample(self, batch_size : int) -> np.ndarray:
+        # choose sample by bootstapping
+        index = np.random.randint(0, min(self.pointer, self.capacity), (batch_size,))
+        
+        return self.buffer[index]
+
+
+
+### used variables
+trpo = TRPO().to(device=device)
+buffer = Replay_Buffer()
+
+optimizer = optim.Adam(trpo.parameters(), lr=0.001)
+
+
+
+
+### training step
+num_episodes = 500
+num_timesteps = 500
+
+print("Chapter 13.    TRPO")
+
+for i in range(num_episodes):
+    state = env.reset()
+    ep_reward = []
+    ep_grad_log_prob = []
+    ep_value = []
+
+    for t in range(num_timesteps):
+        value, mean, log_std = trpo(Tensor(state).to(device=device))
+        action = torch.normal(mean, torch.exp(log_std)).item()
+        next_state, reward, done, info = env.step(action)
+
+        value = value.to(device=cpu).item()
+        mean = mean.to(device=cpu).item()
+        log_std = log_std.to(device=cpu).item()
+
+        ep_reward.append(reward)
+        ep_grad_log_prob.append(trpo.grad_log_prob(action, mean, log_std))
+        ep_value.append(value)
+
+        if done: break
+    
+    ep_reward = np.array(ep_reward)
+    ep_grad_log_prob = np.array(ep_grad_log_prob)
+    ep_value = np.array(ep_value)
+
+    g = np.sum(ep_grad_log_prob*(ep_reward))
+
