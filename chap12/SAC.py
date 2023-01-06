@@ -253,8 +253,12 @@ for i in range(num_epsiodes):
     
     for t in range(num_timesteps):
         mean, std = main_actor(tensor(state).to(device=device)).to(device=cpu).item()
+
         action = torch.normal(mean, std).clamp(action_bound[0], action_bound[1])
-        log_entropy = 
+        log_entropy = -torch.prod(std)**2 - torch.sum(((action-mean)/std)**2)
+
+        action = action.to(device=cpu).clone().numpy()
+        log_entropy = log_entropy.to(device=cpu).clone().numpy()
         next_state, reward, done, info = env.step(action)
         
         if done: break
