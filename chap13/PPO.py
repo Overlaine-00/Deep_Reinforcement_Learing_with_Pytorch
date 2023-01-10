@@ -69,20 +69,24 @@ class Value(nn.Module):
 
 
 ## used variables
-policy = Policy().to(deivce=device)
-old_policy = Policy().to(deivce=device)
-value = Value().to(deivce=device)
+policy_network = Policy().to(deivce=device)
+old_policy_network = Policy().to(deivce=device)
+value_network = Value().to(deivce=device)
 
-value_optimizer = optim.Adam(value.parameters(), lr=lr)
+policy_optimizer = optim.Adam(policy_network.parameters(), lr=lr)
+value_optimizer = optim.Adam(value_network.parameters(), lr=lr)
 
-for old_param, param in zip(old_policy.parameters(), policy.parameters()):
+for old_param, param in zip(old_policy_network.parameters(), policy_network.parameters()):
     old_param.data.copy_(param.data)
 
 
 def objective_fn(ratio : Tensor, advantage : Tensor) -> Tensor:
-        unclipped = torch.mean(ratio*advantage)
-        clipped = torch.mean(torch.clip(ratio, 1-epsilon, 1+epsilon)*advantage)
-        return torch.min(unclipped, clipped)
+    unclipped = torch.mean(ratio*advantage)
+    clipped = torch.mean(torch.clip(ratio, 1-epsilon, 1+epsilon)*advantage)
+    return -torch.min(unclipped, clipped)    # - : we try to minimize loss when backprop
+
+def value_loss_fn(advantage : Tensor) -> Tensor:
+    return torch.mean(advantage**2)
 
 
 
@@ -96,9 +100,69 @@ print("Chapter 13.    PPO")
 
 for i in range(num_episodes):
     state = env.reset()
+    ep_means = []    # this can be removed, in that case this must be recomuted by policy network at training step
+    ep_log_stds = []    # this can be removed, in that case this must be recomuted by policy network at training step
+    ep_states = []
+    ep_actions = []
+    ep_rewards = []
 
     for t in range(num_timesteps):
-        mean, log_std = policy(tensor(state).to(devie=device))
+        mean, log_std = policy_network(tensor(state).to(devie=device))
         std = torch.exp(std)
 
-        action = torch.normal(mean, std).clamp(action_bound[0], action_bound[1]).requires_grad_(False)
+        action = torch.normal(mean, std).to(device=cpu).detach().clamp(action_bound[0], action_bound[1]).numpy()
+        next_state, reward, done, truncated, info = env.step(action)
+
+        ep_means.append(mean)
+        ep_log_stds.append(log_std)
+        ep_states.append(state)
+        ep_actions.append(action)
+        ep_rewards.append(reward)
+
+        state = next_state
+
+        if (t+1%batch_size == 0) or (t == num_timesteps-1):
+            value = value_network(tensor(next_state, dtype=torch.float, device=device))
+
+            # compute ratio and advanatage
+            discounted_rewards = []
+            for r in ep_rewards[::-1]:
+                value = r + gamma*value
+                discounted_rewards.append(value)
+            discounted_rewards.reverse()
+            
+            ep_means = torch.tensor(ep_means, dtype=torch.float, device=device)
+            ep_log_stds = torch.tensor(ep_log_stds, dtype=torch.float, device=device)
+            ep_actions = torch.tensor(ep_actions, dtype=torch.float, device=device)
+
+            discounted_rewards = torch.tensor(discounted_rewards, dtype=torch.float, device=device)
+            values = value_network(tensor(ep_states, dtype=torch.float, device=device))
+
+            ratios = torch.exp(policy_network.log_prob(ep_actions, ep_means, ep_log_stds) - \
+                               old_policy_network.log_prob(ep_actions, ep_means, ep_log_stds))
+            advanatage = discounted_rewards-values
+            
+            # train
+            policy_loss = objective_fn(ratios, advanatage)
+            policy_optimizer.zero_grad()
+            policy_loss.backward()
+            policy_optimizer.step()
+
+            value_loss = value_loss_fn(advanatage)
+            value_optimizer.zero_grad()
+            value_loss.backward()
+            value_optimizer.step()
+            
+            # reset buffer
+            ep_means = [] 
+            ep_log_stds = []
+            ep_states = []
+            ep_actions = []
+            ep_rewards = []
+
+
+
+            
+            
+
+

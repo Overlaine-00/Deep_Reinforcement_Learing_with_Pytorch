@@ -116,7 +116,7 @@ for i in range(num_episodes):
         action = ppo.select_action(state)
         next_state, reward, done, _ = env.step(action)
 
-        episode_states.append(state); episode_actions.append(action); episode_rewards((reward+8)/8)
+        episode_states.append(state); episode_actions.append(action); episode_rewards.append((reward+8)/8)
         state = next_state
         Return += reward
 
