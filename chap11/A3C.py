@@ -276,14 +276,14 @@ class worker_pytorch(mp.Process):
         global global_episode
         total_step = 1
         while global_episode < num_episodes:
-            state = self.env.reset()
+            state = self.env.reset()[0]
             Return = 0
             self.network.reset_transition()
             Log_prob = Entropy = Value = Reward = None
             
             for t in range(num_timesteps):
                 action, log_prob, value, entropy = self.network.select_action(state)
-                next_state, reward, done, _ = self.env.step(action)
+                next_state, reward, done, truncated, info = self.env.step(action)
                 
                 if t>0: self.network.store_transition(Log_prob, Entropy, Value, Reward, value)
                 Log_prob, Entropy, Value, Reward = log_prob, entropy, value, reward
