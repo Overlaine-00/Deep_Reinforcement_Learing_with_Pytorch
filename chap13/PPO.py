@@ -10,6 +10,9 @@ cpu = torch.device("cpu")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+print("Chapter 13.    PPO")
+
+
 
 ### create environment
 env = gym.make("Pendulum-v1", g=9.81).unwrapped
@@ -22,23 +25,36 @@ action_bound = np.concatenate([env.action_space.low, env.action_space.high], dty
 # variables
 epsilon = 0.2
 gamma = 0.9    # decay
+beta_initial = 0.1    # penalty coefficient in PPO-penalty
 lr = 0.001
 buffer_size = int(10e4)
 batch_size = 32
 
+mode = input("Select PPO mode -- clipped / penalty : ")
+print("Selected mode :", mode)
 
 
 
 
-### PPO-clipped
+
+### PPO
 class Policy(nn.Module):
-    def __init__(self, state_shape = state_shape, action_shape = action_shape):
+    def __init__(self, state_shape = state_shape, action_shape = action_shape, mode: str = mode):
+        '''
+        mode : 'clipped' or 'penalty'
+        '''
         super().__init__()
+        self.mode = mode
 
         self.mutual_network = nn.Sequential(nn.Linear(state_shape, 100), nn.ReLU())
         self.mean = nn.Sequential(nn.Linear(100, action_shape), nn.Tanh())    # 2* : action bound = [-2,2] whereas tanh(x) \in (-1,1)
         self.log_std = nn.Linear(100, action_shape)
+
+        if mode == "penalty":
+            self.beta = beta_initial
     
+
+    def get_beta(self): return self.beta
 
     def log_prob(self, action : Tensor, mean : Tensor, log_std : Tensor) -> Tensor:
         return -log_std - (action-mean)**2 / (2*torch.exp(log_std)**2)
@@ -81,10 +97,19 @@ def update_old():
     for old_param, param in zip(old_policy_network.parameters(), policy_network.parameters()):
         old_param.data.copy_(param.data)
 
-def objective_fn(ratio : Tensor, advantage : Tensor) -> Tensor:
-    unclipped = torch.mean(ratio*advantage)
-    clipped = torch.mean(torch.clamp(ratio, 1-epsilon, 1+epsilon)*advantage)
-    return -torch.min(unclipped, clipped)    # - : we try to minimize loss when backprop
+def KL_div(old_mean: Tensor, old_log_std: Tensor, mean: Tensor, log_std: Tensor):
+    old_std, std = torch.exp(old_log_std), torch.exp(log_std)
+    return 1/2*torch.sum( old_std/std + (mean-old_mean)**2/std + log_std/old_log_std, dim=1)
+
+
+def objective_fn(ratio : Tensor, advantage : Tensor, kl_div : Tensor = None,
+                 beta = policy_network.get_beta(), mode=mode) -> Tensor:
+    if mode == "clipped":
+        unclipped = torch.mean(ratio*advantage)
+        clipped = torch.mean(torch.clamp(ratio, 1-epsilon, 1+epsilon)*advantage)
+        return -torch.min(unclipped, clipped)    # - : we try to minimize loss when backprop
+    elif mode == "penalty":
+        return torch.mean(ratio*advantage - beta*kl_div)
 
 def value_loss_fn(advantage : Tensor) -> Tensor:
     return torch.mean(advantage**2)
@@ -98,8 +123,6 @@ update_old()
 ### training
 num_episodes = 1000
 num_timesteps = 200
-
-print("Chapter 13.    PPO")
 
 Return = 0
 for i in range(num_episodes):
@@ -125,7 +148,7 @@ for i in range(num_episodes):
         if (t+1%batch_size == 0) or (t == num_timesteps-1):
             value = value_network(tensor(next_state, device=device, dtype=torch.float))
 
-            # compute ratio and advanatage
+            # compute ratio and advantage
             discounted_rewards = []
             for r in ep_rewards[::-1]:
                 value = r + gamma*value
@@ -135,23 +158,28 @@ for i in range(num_episodes):
             ep_states, ep_actions, ep_rewards = np.array(ep_states), np.array(ep_actions), np.array(ep_rewards)
             
             ep_states = tensor(ep_states, device=device, dtype=torch.float)
-            ep_means ,ep_log_stds = policy_network(ep_states)
+            ep_means, ep_log_stds = policy_network(ep_states)
+            ep_old_means, ep_old_log_stds = old_policy_network(ep_states)
             ep_actions = tensor(ep_actions, device=device, dtype=torch.float)
 
             discounted_rewards = tensor(discounted_rewards, device=device, dtype=torch.float)
             values : Tensor = value_network(ep_states)
             
             ratios = torch.exp(policy_network.log_prob(ep_actions, ep_means, ep_log_stds) - \
-                               old_policy_network.log_prob(ep_actions, ep_means, ep_log_stds))
-            advanatage = discounted_rewards-values
+                               old_policy_network.log_prob(ep_actions, ep_old_means, ep_old_log_stds))
+            advantage = discounted_rewards-values
+            if (mode == "penalty"):
+                kl_div = KL_div(ep_old_means, ep_old_log_stds, ep_means, ep_log_stds)
+            else:
+                kl_div = None
 
             # train
-            value_loss = value_loss_fn(advanatage)
+            value_loss = value_loss_fn(advantage)
             value_optimizer.zero_grad()
             value_loss.backward()
             value_optimizer.step()
 
-            policy_loss = objective_fn(ratios, advanatage.detach())
+            policy_loss = objective_fn(ratios, advantage.detach(), kl_div)
             policy_optimizer.zero_grad()
             policy_loss.backward()
             policy_optimizer.step()
