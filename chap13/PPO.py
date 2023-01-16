@@ -50,6 +50,7 @@ class Policy(nn.Module):
         self.mean = nn.Sequential(nn.Linear(100, action_shape), nn.Tanh())    # 2* : action bound = [-2,2] whereas tanh(x) \in (-1,1)
         self.log_std = nn.Linear(100, action_shape)
 
+        self.beta = None
         if mode == "penalty":
             self.beta = beta_initial
     
